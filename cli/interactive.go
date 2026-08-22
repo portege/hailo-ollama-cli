@@ -111,7 +111,7 @@ func RunInteractive(ctx context.Context, apiCli *client.Client, model string, in
 				fullPrompt := strings.Join(multilineBuffer, "\n")
 				multilineBuffer = nil
 				if strings.TrimSpace(fullPrompt) != "" {
-					chatHistory, err = processPrompt(ctx, apiCli, model, fullPrompt, chatHistory, systemPrompt, options, verbose, sigChan)
+					chatHistory, err = processPrompt(ctx, apiCli, model, fullPrompt, chatHistory, systemPrompt, options, verbose, metrics, sigChan)
 					if err != nil && !errors.Is(err, context.Canceled) {
 						fmt.Printf("Error: %v\n", err)
 					}
