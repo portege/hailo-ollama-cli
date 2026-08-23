@@ -166,7 +166,7 @@ func StartMockServer(port string) (string, func(), error) {
 	})
 
 	// Helper to split a sentence into tokens/words
-	streamResponse := func(w http.ResponseWriter, model string, text string, isChat bool) {
+	streamResponse := func(w http.ResponseWriter, model string, text string, isChat bool, thinking string) {
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "Streaming not supported", http.StatusInternalServerError)
@@ -175,6 +175,23 @@ func StartMockServer(port string) (string, func(), error) {
 
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.WriteHeader(http.StatusOK)
+
+		// Emit a separate reasoning/thinking delta first when requested for a
+		// thinking-capable model.
+		if thinking != "" {
+			json.NewEncoder(w).Encode(ChatResponseChunk{
+				Model:     model,
+				CreatedAt: time.Now(),
+				Message: ChatMessage{
+					Role:     "assistant",
+					Thinking: thinking,
+				},
+				Done: false,
+			})
+			w.Write([]byte("\n"))
+			flusher.Flush()
+			time.Sleep(40 * time.Millisecond)
+		}
 
 		words := strings.Fields(text)
 		for i, word := range words {
@@ -257,7 +274,14 @@ func StartMockServer(port string) (string, func(), error) {
 		}
 
 		text := generateMockText(prompt)
-		streamResponse(w, req.Model, text, true)
+
+		// Simulate separate reasoning output for thinking-capable models
+		// (Qwen / DeepSeek families) when the client requested it.
+		thinking := ""
+		if thinkRequested(req.Think) && (strings.Contains(req.Model, "qwen") || strings.Contains(req.Model, "deepseek")) {
+			thinking = "Let me think through this step by step. I need to identify the key points of the question, reason through each one, and then summarize a clear answer for the user."
+		}
+		streamResponse(w, req.Model, text, true, thinking)
 	})
 
 	// 8. POST /api/generate
@@ -269,7 +293,7 @@ func StartMockServer(port string) (string, func(), error) {
 		}
 
 		text := generateMockText(req.Prompt)
-		streamResponse(w, req.Model, text, false)
+		streamResponse(w, req.Model, text, false, "")
 	})
 
 	// Start listener
@@ -297,6 +321,19 @@ func StartMockServer(port string) (string, func(), error) {
 	}
 
 	return "http://" + actualAddr, cleanup, nil
+}
+
+// thinkRequested reports whether a chat request asked for a separate
+// reasoning/thinking stream (think=true or a non-empty effort string).
+func thinkRequested(think any) bool {
+	switch v := think.(type) {
+	case bool:
+		return v
+	case string:
+		return v != ""
+	default:
+		return false
+	}
 }
 
 func generateMockText(prompt string) string {

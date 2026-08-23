@@ -118,6 +118,20 @@ hailo-ollama webui :9000
 hailo-ollama serve --mock
 ```
 
+### System instructions and reasoning/thinking
+
+Both the interactive terminal chat and the web UI support an optional **system instruction**.
+
+- **Terminal**: use `/set system <prompt>` to set a system instruction (see `/help`).
+- **Web UI**: the composer has a "System instruction (optional)" field above the prompt.
+
+Reasoning/thinking output is supported for **thinking-capable models** (the Qwen and DeepSeek families) that report a separate `thinking` stream:
+
+- **Terminal**: toggle with `/set think`, then a dimmed reasoning trace is printed after each answer.
+- **Web UI**: enable the **Thinking** toggle in the composer; reasoning is shown in a collapsible "Reasoning" panel under each assistant message.
+
+Llama models support system instructions but do not emit a separate reasoning stream, so the thinking trace/panel only appears when the selected model reports one.
+
 ## Testing with mock mode
 
 Run most commands without a real Hailo NPU by adding `--mock`:

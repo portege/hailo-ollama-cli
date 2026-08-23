@@ -25,6 +25,11 @@ var webStaticFS embed.FS
 type webChatRequest struct {
 	Model    string               `json:"model"`
 	Messages []client.ChatMessage `json:"messages"`
+	// System is an optional system instruction sent as the first chat message.
+	System string `json:"system,omitempty"`
+	// Think requests a separate reasoning/thinking stream from thinking-capable
+	// models (e.g. the Qwen family). Boolean or effort string, forwarded as-is.
+	Think any `json:"think,omitempty"`
 }
 
 // RunWebUI serves a ChatGPT-style browser chat interface that streams model
@@ -78,6 +83,12 @@ func handleListModels(apiCli *client.Client) http.HandlerFunc {
 // metrics payload. It must never appear in normal model output.
 const metricsMarker = "@@HAILO-METRICS:"
 
+// reasoningMarker separates the streamed response text from a JSON-encoded
+// reasoning/thinking payload captured from a thinking-capable model. The value
+// is a single JSON string so arbitrary reasoning text (including newlines) is
+// escaped and cannot corrupt the plain-text stream format.
+const reasoningMarker = "@@HAILO-REASONING:"
+
 // webChatMetrics is the JSON payload appended to the end of a completed chat
 // stream. Durations are in milliseconds. Token counts and inference timings
 // come from the final stream chunk reported by the inference server; when the
@@ -123,10 +134,23 @@ func handleWebChat(apiCli *client.Client) http.HandlerFunc {
 		contentChunks := 0
 		responseChars := 0
 
-		chatReq := client.ChatRequest{Model: req.Model, Messages: req.Messages}
+		// Prepend an optional system instruction ahead of the chat history.
+		messages := req.Messages
+		if strings.TrimSpace(req.System) != "" {
+			messages = append([]client.ChatMessage{{Role: "system", Content: req.System}}, messages...)
+		}
+
+		chatReq := client.ChatRequest{Model: req.Model, Messages: messages, Think: req.Think}
+		var thinkingBuilder strings.Builder
 		streamErr := apiCli.ChatStream(r.Context(), chatReq, func(chunk client.ChatResponseChunk) {
 			if chunk.Done {
 				finalChunk = chunk
+			}
+			// Reasoning/thinking deltas arrive on a separate field from the
+			// answer text; keep them out of the plain-text content stream and
+			// emit them after the stream completes.
+			if chunk.Message.Thinking != "" {
+				thinkingBuilder.WriteString(chunk.Message.Thinking)
 			}
 			if chunk.Message.Content != "" {
 				if firstTokenAt.IsZero() {
@@ -142,6 +166,12 @@ func handleWebChat(apiCli *client.Client) http.HandlerFunc {
 			fmt.Fprintf(w, "\n[error: %v]", streamErr)
 			flusher.Flush()
 			return
+		}
+
+		if thinkingBuilder.Len() > 0 {
+			if payload, err := json.Marshal(thinkingBuilder.String()); err == nil {
+				fmt.Fprint(w, "\n"+reasoningMarker+string(payload))
+			}
 		}
 
 		metrics := collectMetrics(finalChunk, start, firstTokenAt, time.Since(start), contentChunks, responseChars)

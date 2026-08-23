@@ -4,14 +4,18 @@ const form = document.getElementById('chat-form');
 const input = document.getElementById('prompt-input');
 const sendBtn = document.getElementById('send-btn');
 const modelSelect = document.getElementById('model-select');
+const systemInput = document.getElementById('system-input');
+const thinkToggle = document.getElementById('think-toggle');
 const newChatBtn = document.getElementById('new-chat');
 
 let history = [];
 let busy = false;
 
-// The backend appends this marker followed by a JSON metrics payload to the
-// end of every completed chat stream. Everything after it is not model output.
+// The backend appends these markers followed by payloads to the end of a
+// completed chat stream. Everything at or after the earliest marker is not
+// model output and must be stripped before display.
 const METRICS_MARKER = '@@HAILO-METRICS:';
+const REASONING_MARKER = '@@HAILO-REASONING:';
 
 async function loadModels() {
   try {
@@ -63,7 +67,7 @@ function addMessage(role, content) {
   row.appendChild(bubble);
   messagesEl.appendChild(row);
   scrollToBottom();
-  return { bubble, body };
+  return { row, bubble, body };
 }
 
 function setBusy(v) {
@@ -91,23 +95,40 @@ newChatBtn.addEventListener('click', () => {
   emptyState.style.display = 'block';
 });
 
-form.addEventListener('submit', async (e) => {
+form.addEventListener('submit', (e) => {
   e.preventDefault();
   if (busy) return;
 
   const prompt = input.value.trim();
   if (!prompt) return;
 
+  input.value = '';
+  input.style.height = 'auto';
+  chat(prompt);
+});
+
+// Sends a prompt through the chat stream, rendering the user message and the
+// streamed assistant reply along with their action buttons (copy / retry).
+async function chat(prompt) {
+  if (busy) return;
+
   const model = modelSelect.value;
   if (!model) {
     alert('Select a model first.');
     return;
   }
+  const system = systemInput.value.trim();
+  const think = thinkToggle.checked ? true : undefined;
 
-  input.value = '';
-  input.style.height = 'auto';
-  addMessage('user', prompt);
+  const userRow = addMessage('user', prompt);
+  const hi = history.length;
+  userRow.row.dataset.hi = hi;
   history.push({ role: 'user', content: prompt });
+  addActions(userRow.bubble, {
+    body: userRow.body,
+    copy: true,
+    onRetry: () => retry(hi, prompt),
+  });
 
   const { bubble: assistantBubble, body: assistantBody } = addMessage('assistant', '');
   const cursor = document.createElement('span');
@@ -121,7 +142,7 @@ form.addEventListener('submit', async (e) => {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages: history }),
+      body: JSON.stringify({ model, messages: history, system, think }),
     });
     if (!res.ok || !res.body) {
       throw new Error(await res.text());
@@ -140,9 +161,15 @@ form.addEventListener('submit', async (e) => {
       scrollToBottom();
     }
 
+    const reasoning = parseReasoning(rawText);
+    if (reasoning) {
+      addReasoningPanel(assistantBubble, reasoning);
+      scrollToBottom();
+    }
+
     const metrics = parseMetrics(rawText);
     if (metrics) {
-      addStatsPanel(assistantBubble, metrics);
+      addStatsPanel(assistantBubble, metrics, model);
       scrollToBottom();
     }
   } catch (err) {
@@ -151,17 +178,89 @@ form.addEventListener('submit', async (e) => {
   } finally {
     cursor.remove();
     history.push({ role: 'assistant', content: assistantText });
+    addActions(assistantBubble, {
+      body: assistantBody,
+      copy: true,
+    });
     setBusy(false);
     input.focus();
   }
-});
+}
+
+// Removes the given user message and every later message from both the history
+// and the rendered rows, then resubmits the same prompt for a fresh answer.
+function retry(hi, prompt) {
+  if (busy) return;
+
+  history = history.slice(0, hi);
+
+  const rows = Array.from(messagesEl.children);
+  const start = rows.findIndex((el) => Number(el.dataset.hi) === hi);
+  if (start !== -1) rows.slice(start).forEach((el) => el.remove());
+
+  chat(prompt);
+}
+
+// Appends copy (and optionally retry) action buttons to a message bubble.
+function addActions(bubble, { body, copy, onRetry }) {
+  if (!copy && !onRetry) return;
+
+  const actions = document.createElement('div');
+  actions.className = 'msg-actions';
+
+  if (copy) {
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'action-btn';
+    copyBtn.textContent = 'Copy';
+    copyBtn.addEventListener('click', async () => {
+      await copyToClipboard(body.textContent);
+      copyBtn.textContent = 'Copied';
+      setTimeout(() => (copyBtn.textContent = 'Copy'), 1500);
+    });
+    actions.appendChild(copyBtn);
+  }
+
+  if (onRetry) {
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'action-btn';
+    retryBtn.textContent = 'Retry';
+    retryBtn.addEventListener('click', onRetry);
+    actions.appendChild(retryBtn);
+  }
+
+  bubble.appendChild(actions);
+}
+
+// Copies text to the clipboard, falling back to a hidden-textarea select+copy
+// for environments where the navigator clipboard API is not available.
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch (e) { /* ignored */ }
+  document.body.removeChild(ta);
+  return Promise.resolve();
+}
 
 loadModels();
 
-// Removes the trailing metrics payload (if any) from the raw stream text.
+// Removes the trailing backend payloads (reasoning and/or metrics) from the
+// raw stream text so only the model's answer remains for display.
 function stripMetrics(raw) {
-  const idx = raw.indexOf(METRICS_MARKER);
+  const idx = firstMarkerIndex(raw);
   return idx === -1 ? raw : raw.slice(0, idx);
+}
+
+// Index of the earliest instrument marker in the raw stream text, or -1.
+function firstMarkerIndex(raw) {
+  const idxs = [raw.indexOf(METRICS_MARKER), raw.indexOf(REASONING_MARKER)].filter((i) => i !== -1);
+  return idxs.length ? Math.min(...idxs) : -1;
 }
 
 // Extracts and parses the JSON metrics payload appended by the backend.
@@ -176,15 +275,54 @@ function parseMetrics(raw) {
   }
 }
 
+// Extracts the JSON-encoded reasoning/thinking payload (if any) emitted by the
+// backend for thinking-capable models.
+function parseReasoning(raw) {
+  const idx = raw.indexOf(REASONING_MARKER);
+  if (idx === -1) return null;
+  let rest = raw.slice(idx + REASONING_MARKER.length);
+  const m = rest.indexOf(METRICS_MARKER);
+  if (m !== -1) rest = rest.slice(0, m);
+  rest = rest.trim();
+  try {
+    const parsed = JSON.parse(rest);
+    return typeof parsed === 'string' && parsed ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function formatDuration(msValue) {
   if (msValue == null || Number.isNaN(msValue)) return '—';
   if (msValue >= 1000) return (msValue / 1000).toFixed(2) + ' s';
   return Math.round(msValue) + ' ms';
 }
 
+// Appends a collapsed-by-default <details> panel showing the model's reasoning
+// when the backend reported a separate thinking stream.
+function addReasoningPanel(bubble, text) {
+  if (!text) return;
+
+  const details = document.createElement('details');
+  details.className = 'reasoning';
+
+  const summary = document.createElement('summary');
+  summary.textContent = 'Reasoning';
+
+  const body = document.createElement('div');
+  body.className = 'reasoning-text';
+  body.textContent = text;
+
+  details.appendChild(summary);
+  details.appendChild(body);
+  bubble.appendChild(details);
+}
+
 // Appends a collapsed-by-default <details> panel with response statistics.
-function addStatsPanel(bubble, m) {
+// `model` is the model id that produced this response.
+function addStatsPanel(bubble, m, model) {
   const rows = [];
+  if (model) rows.push(['Model', model]);
   if (m.first_token_ms != null) rows.push(['Time to first token', formatDuration(m.first_token_ms)]);
   if (m.total_ms != null) rows.push(['Total time', formatDuration(m.total_ms)]);
   if (m.output_tokens) rows.push(['Generated tokens', String(m.output_tokens)]);

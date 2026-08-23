@@ -48,7 +48,7 @@ html, body {
   border-radius: 8px;
   padding: 6px 10px;
   font-size: 13px;
-  max-width: 240px;
+  width: 100%;
 }
 
 .new-chat-btn {
@@ -143,13 +143,46 @@ html, body {
   max-width: 760px;
   margin: 0 auto;
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 8px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 10px 10px 10px 16px;
+  padding: 10px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+/* Textarea and send button share a row below the full-width model picker. */
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+/* Optional system instruction field above the prompt. */
+.system-input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+}
+
+/* Thinking toggle for reasoning-capable models. */
+.think-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.think-toggle input {
+  accent-color: var(--accent);
 }
 
 #prompt-input {
@@ -236,4 +269,72 @@ html, body {
 .stats-value {
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+
+/* Collapsible reasoning/thinking panel under assistant messages. */
+.bubble .reasoning {
+  display: block;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  white-space: normal;
+  background: var(--bg);
+}
+
+.bubble .reasoning summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-dim);
+}
+.bubble .reasoning summary::-webkit-details-marker {
+  display: none;
+}
+.bubble .reasoning summary::before {
+  content: '▸';
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+.bubble .reasoning[open] summary::before {
+  transform: rotate(90deg);
+}
+.bubble .reasoning summary:hover {
+  color: var(--text);
+}
+
+.reasoning-text {
+  margin-top: 8px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* Action buttons (copy / retry) shown below user and assistant messages. */
+.msg-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.msg-actions .action-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+}
+
+.msg-actions .action-btn:hover {
+  color: var(--text);
+  background: var(--border);
 }
