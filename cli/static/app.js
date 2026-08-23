@@ -9,6 +9,10 @@ const newChatBtn = document.getElementById('new-chat');
 let history = [];
 let busy = false;
 
+// The backend appends this marker followed by a JSON metrics payload to the
+// end of every completed chat stream. Everything after it is not model output.
+const METRICS_MARKER = '@@HAILO-METRICS:';
+
 async function loadModels() {
   try {
     const res = await fetch('/api/models');
@@ -50,13 +54,16 @@ function addMessage(role, content) {
 
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
-  bubble.textContent = content;
+  const body = document.createElement('span');
+  body.className = 'bubble-text';
+  body.textContent = content;
+  bubble.appendChild(body);
 
   row.appendChild(avatar);
   row.appendChild(bubble);
   messagesEl.appendChild(row);
   scrollToBottom();
-  return bubble;
+  return { bubble, body };
 }
 
 function setBusy(v) {
@@ -102,7 +109,7 @@ form.addEventListener('submit', async (e) => {
   addMessage('user', prompt);
   history.push({ role: 'user', content: prompt });
 
-  const assistantBubble = addMessage('assistant', '');
+  const { bubble: assistantBubble, body: assistantBody } = addMessage('assistant', '');
   const cursor = document.createElement('span');
   cursor.className = 'cursor';
   assistantBubble.appendChild(cursor);
@@ -122,17 +129,25 @@ form.addEventListener('submit', async (e) => {
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
+    let rawText = '';
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      assistantText += decoder.decode(value, { stream: true });
-      assistantBubble.textContent = assistantText;
+      rawText += decoder.decode(value, { stream: true });
+      assistantText = stripMetrics(rawText);
+      assistantBody.textContent = assistantText;
       assistantBubble.appendChild(cursor);
+      scrollToBottom();
+    }
+
+    const metrics = parseMetrics(rawText);
+    if (metrics) {
+      addStatsPanel(assistantBubble, metrics);
       scrollToBottom();
     }
   } catch (err) {
     assistantText += `\n[error: ${err.message}]`;
-    assistantBubble.textContent = assistantText;
+    assistantBody.textContent = assistantText;
   } finally {
     cursor.remove();
     history.push({ role: 'assistant', content: assistantText });
@@ -142,3 +157,65 @@ form.addEventListener('submit', async (e) => {
 });
 
 loadModels();
+
+// Removes the trailing metrics payload (if any) from the raw stream text.
+function stripMetrics(raw) {
+  const idx = raw.indexOf(METRICS_MARKER);
+  return idx === -1 ? raw : raw.slice(0, idx);
+}
+
+// Extracts and parses the JSON metrics payload appended by the backend.
+function parseMetrics(raw) {
+  const idx = raw.indexOf(METRICS_MARKER);
+  if (idx === -1) return null;
+  try {
+    const parsed = JSON.parse(raw.slice(idx + METRICS_MARKER.length));
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatDuration(msValue) {
+  if (msValue == null || Number.isNaN(msValue)) return '—';
+  if (msValue >= 1000) return (msValue / 1000).toFixed(2) + ' s';
+  return Math.round(msValue) + ' ms';
+}
+
+// Appends a collapsed-by-default <details> panel with response statistics.
+function addStatsPanel(bubble, m) {
+  const rows = [];
+  if (m.first_token_ms != null) rows.push(['Time to first token', formatDuration(m.first_token_ms)]);
+  if (m.total_ms != null) rows.push(['Total time', formatDuration(m.total_ms)]);
+  if (m.output_tokens) rows.push(['Generated tokens', String(m.output_tokens)]);
+  if (m.tokens_per_second) rows.push(['Generation speed', m.tokens_per_second.toFixed(1) + ' tok/s']);
+  if (m.prompt_tokens) rows.push(['Prompt tokens', String(m.prompt_tokens)]);
+  if (m.prompt_eval_ms != null) rows.push(['Prompt evaluation', formatDuration(m.prompt_eval_ms)]);
+  if (m.eval_ms != null) rows.push(['Generation time', formatDuration(m.eval_ms)]);
+  if (m.load_ms != null) rows.push(['Model load time', formatDuration(m.load_ms)]);
+  if (m.response_chars) rows.push(['Response size', `${m.response_chars} chars`]);
+  if (rows.length === 0) return;
+
+  const details = document.createElement('details');
+  details.className = 'stats';
+
+  const summary = document.createElement('summary');
+  summary.textContent = 'Response statistics';
+
+  const grid = document.createElement('div');
+  grid.className = 'stats-grid';
+  for (const [label, value] of rows) {
+    const labelEl = document.createElement('span');
+    labelEl.className = 'stats-label';
+    labelEl.textContent = label;
+    const valueEl = document.createElement('span');
+    valueEl.className = 'stats-value';
+    valueEl.textContent = value;
+    grid.appendChild(labelEl);
+    grid.appendChild(valueEl);
+  }
+
+  details.appendChild(summary);
+  details.appendChild(grid);
+  bubble.appendChild(details);
+}

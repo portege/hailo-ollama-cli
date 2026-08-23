@@ -185,3 +185,55 @@ html, body {
 #send-btn:hover:not(:disabled) {
   opacity: 0.9;
 }
+
+/* Collapsible response statistics shown under assistant messages. */
+.bubble .stats {
+  display: block;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  white-space: normal;
+}
+
+.bubble .stats summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-dim);
+}
+.bubble .stats summary::-webkit-details-marker {
+  display: none;
+}
+.bubble .stats summary::before {
+  content: '▸';
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+.bubble .stats[open] summary::before {
+  transform: rotate(90deg);
+}
+.bubble .stats summary:hover {
+  color: var(--text);
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: start;
+  column-gap: 24px;
+  row-gap: 3px;
+  margin-top: 8px;
+}
+
+.stats-label {
+  color: var(--text-dim);
+}
+
+.stats-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
