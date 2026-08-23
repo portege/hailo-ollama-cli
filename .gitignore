@@ -34,3 +34,4 @@ go.work.sum
 dist/
 build.sh
 hailo-ollama
+*.log

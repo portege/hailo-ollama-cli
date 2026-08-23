@@ -42,25 +42,33 @@ type RemoteListResponse struct {
 }
 
 // ChatMessage represents a single message in a chat history.
+// Thinking holds any reasoning/thinking delta for assistant messages returned
+// by thinking-capable models (e.g. the Qwen family). It is omitted when the
+// model does not report separate reasoning.
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role     string `json:"role"`
+	Content  string `json:"content"`
+	Thinking string `json:"thinking,omitempty"`
 }
 
 // ChatRequest represents a POST payload to /api/chat
 type ChatRequest struct {
-	Model    string            `json:"model"`
-	Messages []ChatMessage     `json:"messages"`
-	Stream   bool              `json:"stream"`
-	Options  map[string]any    `json:"options,omitempty"`
+	Model    string         `json:"model"`
+	Messages []ChatMessage  `json:"messages"`
+	Stream   bool           `json:"stream"`
+	Options  map[string]any `json:"options,omitempty"`
+	// Think requests a separate reasoning/thinking stream. It can be a boolean
+	// (true/false) or a thinking-effort string ("low", "medium", "high", "max")
+	// on servers that support it. Omitted when unset.
+	Think any `json:"think,omitempty"`
 }
 
 // ChatResponseChunk represents a single streamed line from /api/chat
 type ChatResponseChunk struct {
-	Model      string      `json:"model"`
-	CreatedAt  time.Time   `json:"created_at"`
-	Message    ChatMessage `json:"message"`
-	Done       bool        `json:"done"`
+	Model     string      `json:"model"`
+	CreatedAt time.Time   `json:"created_at"`
+	Message   ChatMessage `json:"message"`
+	Done      bool        `json:"done"`
 
 	// Stats
 	TotalDuration      int64 `json:"total_duration,omitempty"`
@@ -82,10 +90,10 @@ type GenerateRequest struct {
 
 // GenerateResponseChunk represents a single streamed line from /api/generate
 type GenerateResponseChunk struct {
-	Model      string    `json:"model"`
-	CreatedAt  time.Time `json:"created_at"`
-	Response   string    `json:"response"`
-	Done       bool      `json:"done"`
+	Model     string    `json:"model"`
+	CreatedAt time.Time `json:"created_at"`
+	Response  string    `json:"response"`
+	Done      bool      `json:"done"`
 
 	// Stats
 	TotalDuration      int64 `json:"total_duration,omitempty"`

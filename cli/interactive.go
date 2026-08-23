@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"hailo-ollama-cli/client"
 	"github.com/peterh/liner"
+	"hailo-ollama-cli/client"
 )
 
 // RunInteractive starts the interactive chat loop with the model.
@@ -27,7 +27,7 @@ func RunInteractive(ctx context.Context, apiCli *client.Client, model string, in
 	// Set autocompletion for slash commands
 	line.SetCompleter(func(inputLine string) []string {
 		if strings.HasPrefix(inputLine, "/") {
-			cmds := []string{"/bye", "/exit", "/clear", "/help", "/set system", "/set parameter", "/show"}
+			cmds := []string{"/bye", "/exit", "/clear", "/help", "/set system", "/set think", "/set parameter", "/show"}
 			var matched []string
 			for _, c := range cmds {
 				if strings.HasPrefix(c, inputLine) {
@@ -56,6 +56,7 @@ func RunInteractive(ctx context.Context, apiCli *client.Client, model string, in
 	options := make(map[string]any)
 	verbose := initialVerbose
 	metrics := initialMetrics
+	thinkMode := false
 
 	fmt.Printf(">>> Send a message to %s (type /help for commands)\n", model)
 
@@ -111,7 +112,7 @@ func RunInteractive(ctx context.Context, apiCli *client.Client, model string, in
 				fullPrompt := strings.Join(multilineBuffer, "\n")
 				multilineBuffer = nil
 				if strings.TrimSpace(fullPrompt) != "" {
-					chatHistory, err = processPrompt(ctx, apiCli, model, fullPrompt, chatHistory, systemPrompt, options, verbose, sigChan)
+					chatHistory, err = processPrompt(ctx, apiCli, model, fullPrompt, chatHistory, systemPrompt, options, verbose, metrics, thinkMode, sigChan)
 					if err != nil && !errors.Is(err, context.Canceled) {
 						fmt.Printf("Error: %v\n", err)
 					}
@@ -188,6 +189,9 @@ func RunInteractive(ctx context.Context, apiCli *client.Client, model string, in
 				case "metrics":
 					metrics = !metrics
 					fmt.Printf("Metrics footer: %t\n", metrics)
+				case "think":
+					thinkMode = !thinkMode
+					fmt.Printf("Thinking mode: %t\n", thinkMode)
 				case "parameter":
 					if len(parts) < 4 {
 						fmt.Println("Usage: /set parameter <key> <value>")
@@ -219,7 +223,7 @@ func RunInteractive(ctx context.Context, apiCli *client.Client, model string, in
 
 		// Regular prompt
 		var processErr error
-		chatHistory, processErr = processPrompt(ctx, apiCli, model, trimmedInput, chatHistory, systemPrompt, options, verbose, metrics, sigChan)
+		chatHistory, processErr = processPrompt(ctx, apiCli, model, trimmedInput, chatHistory, systemPrompt, options, verbose, metrics, thinkMode, sigChan)
 		if processErr != nil {
 			if errors.Is(processErr, context.Canceled) {
 				fmt.Println("\n[Cancelled]")
@@ -239,6 +243,7 @@ func printHelp() {
 	fmt.Println("  /show                Show details for the current model")
 	fmt.Println("  /set system <p>      Set the system instruction")
 	fmt.Println("  /set parameter <k> <v> Set a model parameter (e.g. temperature 0.7)")
+	fmt.Println("  /set think           Toggle separate reasoning/thinking output")
 	fmt.Println("  /set verbose         Toggle detailed timing statistics")
 	fmt.Println("  /set metrics         Toggle performance metrics footer")
 	fmt.Println("  /help, /?            Display this help menu")
@@ -255,6 +260,7 @@ func processPrompt(
 	options map[string]any,
 	verbose bool,
 	metrics bool,
+	think bool,
 	sigChan chan os.Signal,
 ) ([]client.ChatMessage, error) {
 	// Construct the chat request messages list
@@ -269,6 +275,7 @@ func processPrompt(
 		Model:    model,
 		Messages: reqMessages,
 		Options:  options,
+		Think:    think,
 	}
 
 	// Prepare cancellable context for streaming
@@ -286,6 +293,7 @@ func processPrompt(
 	}()
 
 	var responseBuilder strings.Builder
+	var thinkingBuilder strings.Builder
 	var lastChunk client.ChatResponseChunk
 	var firstByteTime time.Duration
 	startTime := time.Now()
@@ -293,6 +301,11 @@ func processPrompt(
 
 	// Start streaming
 	err := apiCli.ChatStream(streamCtx, req, func(chunk client.ChatResponseChunk) {
+		// Reasoning/thinking deltas are collected separately so the answer is
+		// printed cleanly; the thinking trace is shown after the stream.
+		if chunk.Message.Thinking != "" {
+			thinkingBuilder.WriteString(chunk.Message.Thinking)
+		}
 		if chunk.Message.Content != "" {
 			if !hasReceivedFirstByte {
 				firstByteTime = time.Since(startTime)
@@ -317,6 +330,14 @@ func processPrompt(
 
 	totalTime := time.Since(startTime)
 	fmt.Println() // trailing newline after stream finishes
+
+	// Print a dimmed reasoning trace when the model reported thinking output.
+	if thinkingBuilder.Len() > 0 {
+		fmt.Println("\x1b[2m--- Reasoning ---\x1b[0m")
+		fmt.Print(thinkingBuilder.String())
+		fmt.Println()
+		fmt.Println("\x1b[2m--- End reasoning ---\x1b[0m")
+	}
 
 	// Print Footer
 	if metrics {

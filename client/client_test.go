@@ -91,6 +91,34 @@ func TestClientAndMockServer(t *testing.T) {
 		t.Errorf("ChatStream received zero tokens")
 	}
 
+	// 9b. Test ChatStream forwards the think flag and decodes reasoning deltas
+	var thinkingTokens []string
+	var contentTokens []string
+	thinkReq := ChatRequest{
+		Model: "qwen2.5:1.5b",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "hello"},
+		},
+		Think: true,
+	}
+	err = c.ChatStream(ctx, thinkReq, func(chunk ChatResponseChunk) {
+		if chunk.Message.Thinking != "" {
+			thinkingTokens = append(thinkingTokens, chunk.Message.Thinking)
+		}
+		if chunk.Message.Content != "" {
+			contentTokens = append(contentTokens, chunk.Message.Content)
+		}
+	})
+	if err != nil {
+		t.Errorf("ChatStream with thinking failed: %v", err)
+	}
+	if len(thinkingTokens) == 0 {
+		t.Errorf("ChatStream with thinking received zero reasoning deltas")
+	}
+	if len(contentTokens) == 0 {
+		t.Errorf("ChatStream with thinking received zero content tokens")
+	}
+
 	// 10. Test GenerateStream (streaming)
 	var genTokens []string
 	genReq := GenerateRequest{

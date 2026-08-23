@@ -32,6 +32,8 @@ func printGlobalUsage() {
 	fmt.Println("  rm / delete <model>   Remove a model")
 	fmt.Println("  ps                    List currently running models")
 	fmt.Println("  show <model>          Show detailed metadata for a model")
+	fmt.Println("  monitor               Live NPU utilization view (wraps hailortcli monitor)")
+	fmt.Println("  webui [addr]          Start a browser-based chat UI (default addr: :8080)")
 	fmt.Println("  serve                 Start server service (with --mock, runs a local mock server)")
 	fmt.Println()
 	fmt.Println("Environment Variables:")
@@ -179,6 +181,16 @@ func main() {
 			os.Exit(1)
 		}
 		err = cli.ShowModelInfo(ctx, apiCli, cmdArgs[0])
+
+	case "monitor":
+		err = cli.RunMonitor(ctx, mockFlag)
+
+	case "webui":
+		addr := ":8080"
+		if len(cmdArgs) > 0 {
+			addr = cmdArgs[0]
+		}
+		err = cli.RunWebUI(ctx, apiCli, addr)
 
 	case "rm", "delete":
 		if len(cmdArgs) < 1 {
