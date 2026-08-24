@@ -34,7 +34,11 @@ type webChatRequest struct {
 
 // RunWebUI serves a ChatGPT-style browser chat interface that streams model
 // responses token-by-token over the given bind address (e.g. ":8080").
-func RunWebUI(ctx context.Context, apiCli *client.Client, addr string) error {
+//
+// metricsPath optionally points at a hailo-monitor --json JSONL file. When
+// empty it falls back to HAILO_NPU_METRICS, then to auto-spawning a local
+// hailo-monitor writing into the user cache directory (see cli/npu.go).
+func RunWebUI(ctx context.Context, apiCli *client.Client, addr, metricsPath string) error {
 	staticContent, err := fs.Sub(webStaticFS, "static")
 	if err != nil {
 		return fmt.Errorf("failed to load embedded web assets: %w", err)
@@ -44,6 +48,12 @@ func RunWebUI(ctx context.Context, apiCli *client.Client, addr string) error {
 	mux.Handle("/", http.FileServer(http.FS(staticContent)))
 	mux.HandleFunc("GET /api/models", handleListModels(apiCli))
 	mux.HandleFunc("POST /api/chat", handleWebChat(apiCli))
+
+	// NPU telemetry: tail hailo-monitor output and expose API/SSE endpoints.
+	npu := startNPUSource(ctx, apiCli, metricsPath)
+	mux.HandleFunc("GET /api/npu/metrics", npu.handleMetrics)
+	mux.HandleFunc("GET /api/npu/history", npu.handleHistory)
+	mux.HandleFunc("GET /api/npu/stream", npu.handleStream)
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()

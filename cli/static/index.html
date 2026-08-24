@@ -10,6 +10,7 @@
   <div class="app">
     <header class="topbar">
       <div class="brand">Hailo&nbsp;Ollama</div>
+      <button id="npu-chip" class="npu-chip" type="button" title="Live NPU status">NPU …</button>
       <button id="new-chat" class="new-chat-btn" type="button" title="Start a new chat">+ New chat</button>
     </header>
 
@@ -22,9 +23,16 @@
 
     <footer class="composer">
       <form id="chat-form" autocomplete="off">
-        <select id="model-select" class="model-select">
-          <option value="">Loading models…</option>
-        </select>
+        <div class="composer-controls">
+          <label for="model-select" class="model-label">Model:</label>
+          <select id="model-select" class="model-select">
+            <option value="">Loading models…</option>
+          </select>
+          <label class="think-toggle" title="Request separate reasoning from thinking-capable models">
+            <input type="checkbox" id="think-toggle" />
+            <span>Thinking</span>
+          </label>
+        </div>
         <input id="system-input" class="system-input" type="text" placeholder="System instruction (optional)…" />
         <div class="composer-row">
           <textarea id="prompt-input" rows="1" placeholder="Message Hailo Ollama…" required></textarea>
@@ -34,12 +42,16 @@
             </svg>
           </button>
         </div>
-        <label class="think-toggle" title="Request separate reasoning from thinking-capable models">
-          <input type="checkbox" id="think-toggle" />
-          <span>Thinking</span>
-        </label>
       </form>
     </footer>
+
+    <aside id="npu-drawer" class="npu-drawer" aria-hidden="true">
+      <header class="npu-drawer-header">
+        <span>NPU Status</span>
+        <button id="npu-close" type="button" title="Close">✕</button>
+      </header>
+      <div id="npu-body" class="npu-body"></div>
+    </aside>
   </div>
   <script src="/app.js"></script>
 </body>

@@ -1,0 +1,7 @@
+/var/lib/hailo-npu/metrics.jsonl {
+    weekly
+    rotate 4
+    compress
+    copytruncate
+    missingok
+}

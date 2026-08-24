@@ -357,3 +357,149 @@ function addStatsPanel(bubble, m, model) {
   details.appendChild(grid);
   bubble.appendChild(details);
 }
+
+/* ================= NPU status (hailo-monitor) ================= */
+const npuChip = document.getElementById('npu-chip');
+const npuDrawer = document.getElementById('npu-drawer');
+const npuBody = document.getElementById('npu-body');
+
+let npuLastSeq = null;
+
+function npuFmt(v, d = 1) {
+  return v === null || v === undefined ? '—' : Number(v).toFixed(d);
+}
+function npuPctColor(p) {
+  if (p >= 90) return '#e06c75';
+  if (p >= 60) return '#d19a66';
+  return 'var(--accent)';
+}
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function renderNpuChip(s, stale) {
+  if (!s) { npuChip.textContent = 'NPU no data'; npuChip.classList.add('stale'); return; }
+  const usage = s.nnc_utilization == null ? null : s.nnc_utilization;
+  const temp = s.ts0_c == null ? '?' : Number(s.ts0_c).toFixed(0);
+  npuChip.textContent = `NPU ${usage === null ? '—' : usage.toFixed(0) + '%'} · ${temp}°C`;
+  npuChip.classList.toggle('stale', !!stale);
+}
+
+function npuCard(label, valueHTML, subHTML) {
+  return `<div class="npu-card"><div class="label">${label}</div>` +
+         `<div class="value">${valueHTML}</div>${subHTML ? `<div class="sub">${subHTML}</div>` : ''}</div>`;
+}
+
+function renderNpuDrawer(j) {
+  const s = j.snapshot;
+  if (!s) {
+    npuBody.innerHTML = '<div class="npu-empty">No NPU data yet.</div>' +
+      '<div class="npu-empty" style="margin-top:8px">Start the producer:<br>' +
+      '<code>hailo-monitor --interval 1000 --json &gt;&gt; ~/.cache/hailo-ollama/npu-metrics.jsonl</code><br>' +
+      'or pass a file: <code>webui :8080 /path/metrics.jsonl</code></div>';
+    return;
+  }
+  const stale = j.age_ms > 5000;
+  const serverModels = Array.isArray(j.running_models) ? j.running_models : [];
+  const serverTag = serverModels.length
+    ? `server: ${esc(serverModels.join(', '))}`
+    : '';
+  const usage = s.nnc_utilization;
+  const cpu = s.cpu_utilization;
+  const ramPct = s.ram_total_kib > 0 ? (s.ram_used_kib / s.ram_total_kib) * 100 : null;
+
+  let html = '';
+
+  // Headline utilization card
+  html += npuCard('NPU core utilization',
+    `<span style="color:${npuPctColor(usage ?? 0)}">${npuFmt(usage)}%</span>`,
+    `cpu ${npuFmt(cpu)}%` +
+    (s.workload_active ? ` · local ${esc(s.model)} @ ${Number(s.fps).toFixed(1)} fps` :
+     serverTag ? ` · ${serverTag}` :
+     (usage > 1 ? ' · busy with another process' : '')) +
+        `<div class="bar"><span style="width:${Math.min(usage ?? 0, 100)}%;background:${npuPctColor(usage ?? 0)}"></span></div>`);
+
+  // Temperatures + voltage
+  html += '<div class="npu-grid">';
+  html += npuCard('Temperature', `${npuFmt(s.ts0_c)}°C`, `TS1 ${npuFmt(s.ts1_c)}°C · die ${npuFmt(s.on_die_c)}°C`);
+  html += npuCard('Voltage', `${npuFmt(s.on_die_voltage_mv, 0)} mV`,
+    s.bist_failure_mask > 0 ? '<span class="badge danger">BIST FAIL</span>' : '<span class="badge ok">BIST ok</span>');
+  html += '</div>';
+
+  // RAM
+  if (s.ram_total_kib > 0) {
+    html += npuCard('Device RAM',
+      `${(s.ram_used_kib/1024).toFixed(0)} / ${(s.ram_total_kib/1024).toFixed(0)} MiB`,
+      ramPct !== null ? `<div class="bar"><span style="width:${ramPct}%"></span></div>` : '');
+  }
+
+  // Protection badges
+  const badges = [];
+  badges.push(`<span class="badge ${s.temp_throttling_active ? 'danger' : 'ok'}">temp-throttle</span>`);
+  badges.push(`<span class="badge ${s.overcurrent_throttling_active ? 'danger' : 'ok'}">oc-throttle</span>`);
+  badges.push(`<span class="badge ${s.overcurrent_protect_active ? 'danger' : 'ok'}">oc-protect</span>`);
+  html += npuCard('Protection', badges.join(' '),
+    `orange ${s.orange_temp_c ?? '—'}°C · red ${s.red_temp_c ?? '—'}°C`);
+
+  // Platform / link kv pairs
+  html += npuCard('Platform', '', `
+    <div class="npu-kv"><span>Device</span><span>${esc(s.device_id)}</span></div>
+    <div class="npu-kv"><span>Firmware</span><span>${esc(s.fw_version)}${s.fw_is_release ? '' : ' (dev)'}</span></div>
+    <div class="npu-kv"><span>Driver</span><span>${esc(s.driver_version)}</span></div>
+    <div class="npu-kv"><span>Kernel</span><span>${esc(s.kernel_release)}</span></div>
+    <div class="npu-kv"><span>PCIe link</span><span>${esc(s.pcie.link_cur)} x${s.pcie.width_cur} (max x${s.pcie.width_max})</span></div>
+    <div class="npu-kv"><span>Boot / LCS</span><span>${esc(s.boot_source)} / 0x${Number(s.lcs).toString(16)}</span></div>
+    <div class="npu-kv"><span>NN-core clock</span><span>${s.nn_core_clock_hz ? (s.nn_core_clock_hz/1e6).toFixed(0)+' MHz' : '—'}</span></div>`);
+
+  // Model attribution: local --hef workload vs server-resident chat models
+  var modelHTML;
+  if (s.workload_active) {
+    modelHTML = npuCard('Local model (--hef)', esc(s.model),
+      `${npuFmt(s.fps)} fps · ${npuFmt(s.latency_ms,2)} ms/frame · load ${npuFmt(s.load_percent)}%` +
+      `<div class="bar"><span style="width:${Math.min(s.load_percent,100)}%"></span></div>`);
+  } else if (serverModels.length) {
+    modelHTML = npuCard('Server models',
+      esc(serverModels.join(', ')),
+      'resident in the inference server — this is what is driving NPU usage');
+  } else {
+    modelHTML = npuCard('Models', '<span class="npu-empty">none resident</span>',
+      'load a chat model or run hailo-monitor --hef <m.hef> to populate');
+  }
+  html += modelHTML;
+
+  // Events
+  const ev = (s.events || []).slice(-8).reverse();
+  html += npuCard(`Firmware events <span class="sub">(${s.events_total} total)</span>`,
+    ev.length ? '' : '<span class="npu-empty">none</span>',
+    ev.length ? `<ul class="npu-events">${ev.map(e =>
+      `<li><b>${esc(e.time)}</b> ${esc(e.name)}${e.detail ? ' — ' + esc(e.detail) : ''}</li>`).join('')}</ul>` : '');
+
+  if (stale) html += '<div class="npu-empty">⚠ data is stale — producer may have stopped</div>';
+  npuBody.innerHTML = html;
+}
+
+async function refreshNPU() {
+  try {
+    const res = await fetch('/api/npu/metrics');
+    const j = await res.json();
+    renderNpuChip(j.snapshot, j.age_ms > 5000);
+    if (!npuDrawer.classList.contains('open')) return;
+    // Only repaint the open drawer when there is something new.
+    if (j.received_at === npuLastSeq) return;
+    npuLastSeq = j.received_at;
+    renderNpuDrawer(j);
+  } catch (_) { /* backend unreachable */ }
+}
+
+npuChip.addEventListener('click', () => {
+  npuDrawer.classList.toggle('open');
+  npuLastSeq = null; // force redraw on open
+  refreshNPU();
+});
+document.getElementById('npu-close').addEventListener('click', () =>
+  npuDrawer.classList.remove('open'));
+
+setInterval(refreshNPU, 2000);
+refreshNPU();

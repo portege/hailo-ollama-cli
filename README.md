@@ -178,3 +178,37 @@ make clean
 ## License
 
 MIT
+
+## Live NPU monitoring (webui)
+
+The WebUI includes a live NPU status chip in the header. Click it for the full
+panel: core/CPU utilization, temperatures, voltage + BIST state, device RAM,
+throttling zones and thresholds, PCIe link training, firmware/driver/kernel
+versions and a firmware fault-event log.
+
+Data comes from `hailo-monitor --json` (JSON-lines). Configuration, in order:
+
+1. explicit path: `hailo-ollama webui :8080 /path/to/metrics.jsonl`
+2. env: `HAILO_NPU_METRICS=/path/to/metrics.jsonl`
+3. default: `/var/lib/hailo-npu/metrics.jsonl` (written by the producer service
+   below — this is the recommended setup)
+
+The panel also polls the inference server's `/api/ps` every 5 s, so the
+**Server models** card shows exactly which chat model is resident and driving
+NPU usage (e.g. `llama3.2:1b` after a chat request; it disappears once the
+server's keep-alive expires).
+
+Run the producer as a service (recommended):
+
+```bash
+sudo cp deploy/hailo-npu-metrics.service /etc/systemd/system/
+sudo systemctl enable --now hailo-npu-metrics
+```
+
+HTTP API:
+
+```bash
+curl -s localhost:8080/api/npu/metrics            # latest snapshot + age
+ curl -s 'localhost:8080/api/npu/history?limit=60' # recent samples (charts)
+curl -sN localhost:8080/api/npu/stream            # Server-Sent Events feed
+```

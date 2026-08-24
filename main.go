@@ -33,7 +33,8 @@ func printGlobalUsage() {
 	fmt.Println("  ps                    List currently running models")
 	fmt.Println("  show <model>          Show detailed metadata for a model")
 	fmt.Println("  monitor               Live NPU utilization view (wraps hailortcli monitor)")
-	fmt.Println("  webui [addr]          Start a browser-based chat UI (default addr: :8080)")
+	fmt.Println("  webui [addr] [metrics.jsonl]")
+	fmt.Println("                        Start browser chat UI + live NPU panel (default addr: :8080).")
 	fmt.Println("  serve                 Start server service (with --mock, runs a local mock server)")
 	fmt.Println()
 	fmt.Println("Environment Variables:")
@@ -190,7 +191,11 @@ func main() {
 		if len(cmdArgs) > 0 {
 			addr = cmdArgs[0]
 		}
-		err = cli.RunWebUI(ctx, apiCli, addr)
+		metricsPath := ""
+		if len(cmdArgs) > 1 {
+			metricsPath = cmdArgs[1]
+		}
+		err = cli.RunWebUI(ctx, apiCli, addr, metricsPath)
 
 	case "rm", "delete":
 		if len(cmdArgs) < 1 {

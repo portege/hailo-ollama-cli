@@ -1,0 +1,17 @@
+[Unit]
+Description=Hailo NPU metrics streamer (feeds the webui NPU panel)
+After=multi-user.target
+
+[Service]
+# Binary path - adjust if hailo-monitor lives elsewhere.
+ExecStart=/home/boi/repo/hailo-monitor/build/hailo-monitor --interval 1000 --json
+# Ensure the output directory exists (StateDirectory is not reliable here).
+ExecStartPre=+/usr/bin/mkdir -p /var/lib/hailo-npu
+ExecStartPre=+/usr/bin/chown boi:boi /var/lib/hailo-npu
+StandardOutput=append:/var/lib/hailo-npu/metrics.jsonl
+Restart=always
+RestartSec=2
+User=boi
+
+[Install]
+WantedBy=multi-user.target
