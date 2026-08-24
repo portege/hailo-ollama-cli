@@ -41,7 +41,8 @@ html, body {
   margin-right: auto;
 }
 
-.model-select {
+.model-select,
+.instruction-select {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
@@ -51,6 +52,10 @@ html, body {
   width: auto;
   max-width: 220px;
   min-width: 0;
+}
+/* Model names run longer than instruction names; keep both compact. */
+.instruction-select {
+  max-width: 200px;
 }
 
 .new-chat-btn {
@@ -154,14 +159,16 @@ html, body {
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
 }
 
-/* Inline controls row: compact model picker with its label plus the thinking toggle. */
+/* Inline controls row: model picker, saved-instruction picker and the thinking toggle. */
 .composer-controls {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
-.model-label {
+.model-label,
+.instruction-label {
   font-size: 12px;
   color: var(--text-dim);
   white-space: nowrap;
@@ -173,18 +180,6 @@ html, body {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-}
-
-/* Optional system instruction field above the prompt. */
-.system-input {
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 10px;
-  font-size: 13px;
-  font-family: inherit;
-  width: 100%;
 }
 
 /* Thinking toggle for reasoning-capable models. */
@@ -442,3 +437,65 @@ html, body {
 .npu-empty { color: var(--text-dim); }
 .npu-kv { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
 .npu-kv span:first-child { color: var(--text-dim); }
+
+/* ---------- Saved instruction dialog ---------- */
+.instruction-dialog {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  width: min(440px, 92vw);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+.instruction-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+.instruction-dialog h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+.instruction-field {
+  display: block;
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  margin-bottom: 10px;
+  resize: vertical;
+}
+.instruction-field:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.dialog-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.dialog-btn:hover {
+  background: var(--border);
+}
+.dialog-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.dialog-btn.primary:hover {
+  opacity: 0.9;
+}

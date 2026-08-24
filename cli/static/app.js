@@ -4,7 +4,11 @@ const form = document.getElementById('chat-form');
 const input = document.getElementById('prompt-input');
 const sendBtn = document.getElementById('send-btn');
 const modelSelect = document.getElementById('model-select');
-const systemInput = document.getElementById('system-input');
+const instructionSelect = document.getElementById('instruction-select');
+const instructionDialog = document.getElementById('instruction-dialog');
+const instructionName = document.getElementById('instruction-name');
+const instructionText = document.getElementById('instruction-text');
+const instructionSaveBtn = document.getElementById('instruction-save');
 const thinkToggle = document.getElementById('think-toggle');
 const newChatBtn = document.getElementById('new-chat');
 
@@ -41,6 +45,132 @@ async function loadModels() {
     modelSelect.appendChild(opt);
   }
 }
+
+/* ================= Saved system instructions ================= */
+// Instructions are stored per-browser in localStorage as [{ name, text }].
+// The dropdown shows them next to the model picker; "Add instruction…" opens
+// a dialog window to save a new one.
+const INSTRUCTIONS_KEY = 'hailo-system-instructions';
+const INSTR_ADD = '__add_instruction__';
+const INSTR_DEL = '__delete_instruction__';
+
+// Currently active instruction text ('' = none). Kept separate from the select
+// value so the Add/Delete pseudo-options never leak into /api/chat requests.
+let activeInstruction = '';
+
+function loadInstructions() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(INSTRUCTIONS_KEY));
+    return Array.isArray(raw) ? raw.filter((it) => it && it.name && it.text) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function saveInstructions(list) {
+  localStorage.setItem(INSTRUCTIONS_KEY, JSON.stringify(list));
+}
+
+// Rebuilds the dropdown options: None, every saved instruction, then a Manage
+// group with the add/delete actions. `selected` is the instruction text that
+// should appear selected afterwards.
+function renderInstructionSelect(selected) {
+  const items = loadInstructions();
+  instructionSelect.innerHTML = '';
+
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = 'None';
+  instructionSelect.appendChild(none);
+
+  for (const item of items) {
+    const opt = document.createElement('option');
+    opt.value = item.text;
+    opt.textContent = item.name;
+    instructionSelect.appendChild(opt);
+  }
+
+  const manage = document.createElement('optgroup');
+  manage.label = 'Manage';
+  const add = document.createElement('option');
+  add.value = INSTR_ADD;
+  add.textContent = '＋ Add instruction…';
+  manage.appendChild(add);
+  if (selected) {
+    const current = items.find((it) => it.text === selected);
+    const del = document.createElement('option');
+    del.value = INSTR_DEL;
+    del.textContent = current ? `Delete "${current.name}"` : 'Delete instruction';
+    manage.appendChild(del);
+  }
+  instructionSelect.appendChild(manage);
+
+  instructionSelect.value = selected;
+}
+
+function openInstructionDialog() {
+  instructionName.value = '';
+  instructionText.value = '';
+  instructionDialog.showModal();
+  instructionName.focus();
+}
+
+instructionSelect.addEventListener('change', () => {
+  const v = instructionSelect.value;
+  if (v === INSTR_ADD) {
+    openInstructionDialog();
+    return; // selection is restored when the dialog closes without saving
+  }
+  if (v === INSTR_DEL) {
+    const items = loadInstructions();
+    const idx = items.findIndex((it) => it.text === activeInstruction);
+    const name = idx >= 0 ? items[idx].name : 'this instruction';
+    if (!confirm(`Delete instruction "${name}"?`)) {
+      renderInstructionSelect(activeInstruction);
+      return;
+    }
+    if (idx >= 0) items.splice(idx, 1);
+    saveInstructions(items);
+    activeInstruction = '';
+    renderInstructionSelect('');
+    return;
+  }
+  activeInstruction = v;
+});
+
+instructionSaveBtn.addEventListener('click', () => {
+  const name = instructionName.value.trim();
+  const text = instructionText.value.trim();
+  if (!name || !text) {
+    // Require both a name and the instruction text itself.
+    (name ? instructionText : instructionName).focus();
+    return;
+  }
+  const items = loadInstructions();
+  items.push({ name, text });
+  saveInstructions(items);
+  activeInstruction = text;
+  instructionDialog.close(); // the close handler re-renders the dropdown
+});
+
+document.getElementById('instruction-cancel').addEventListener('click', () =>
+  instructionDialog.close());
+
+// Enter in the name field saves; Enter inside the textarea stays a newline.
+instructionName.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    instructionSaveBtn.click();
+  }
+});
+
+// Whenever the dialog closes (save, cancel or Esc) rebuild the dropdown so it
+// reflects storage; on cancel this restores the previous selection.
+instructionDialog.addEventListener('close', () => {
+  renderInstructionSelect(activeInstruction);
+});
+
+renderInstructionSelect('');
 
 function scrollToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -117,7 +247,7 @@ async function chat(prompt) {
     alert('Select a model first.');
     return;
   }
-  const system = systemInput.value.trim();
+  const system = activeInstruction.trim();
   const think = thinkToggle.checked ? true : undefined;
 
   const userRow = addMessage('user', prompt);

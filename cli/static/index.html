@@ -28,12 +28,15 @@
           <select id="model-select" class="model-select">
             <option value="">Loading models…</option>
           </select>
+          <label for="instruction-select" class="instruction-label">Instruction:</label>
+          <select id="instruction-select" class="instruction-select" title="Saved system instructions">
+            <option value="">None</option>
+          </select>
           <label class="think-toggle" title="Request separate reasoning from thinking-capable models">
             <input type="checkbox" id="think-toggle" />
             <span>Thinking</span>
           </label>
         </div>
-        <input id="system-input" class="system-input" type="text" placeholder="System instruction (optional)…" />
         <div class="composer-row">
           <textarea id="prompt-input" rows="1" placeholder="Message Hailo Ollama…" required></textarea>
           <button type="submit" id="send-btn" aria-label="Send message">
@@ -52,6 +55,16 @@
       </header>
       <div id="npu-body" class="npu-body"></div>
     </aside>
+
+    <dialog id="instruction-dialog" class="instruction-dialog">
+      <h2>Add instruction</h2>
+      <input id="instruction-name" class="instruction-field" type="text" placeholder="Name (e.g. Code reviewer)…" maxlength="80" />
+      <textarea id="instruction-text" class="instruction-field" rows="6" placeholder="Instruction text sent as the system message…"></textarea>
+      <div class="dialog-actions">
+        <button type="button" id="instruction-cancel" class="dialog-btn">Cancel</button>
+        <button type="button" id="instruction-save" class="dialog-btn primary">Save</button>
+      </div>
+    </dialog>
   </div>
   <script src="/app.js"></script>
 </body>
