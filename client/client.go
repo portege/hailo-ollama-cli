@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -104,9 +105,15 @@ type GenerateResponseChunk struct {
 	EvalDuration       int64 `json:"eval_duration,omitempty"`
 }
 
-// PullRequest represents a POST payload to /api/pull
+// PullRequest represents a POST payload to /api/pull.
+//
+// Both Name (legacy ollama field) and Model (current ollama field) are sent
+// with the same value: hailo-ollama servers built on newer ollama DTOs read
+// "model" and crash with a 500 ("Error. Null pointer.") when it is missing,
+// while older builds only know "name".
 type PullRequest struct {
 	Name   string `json:"name"`
+	Model  string `json:"model"`
 	Stream bool   `json:"stream"`
 }
 
@@ -220,8 +227,32 @@ func (c *Client) ListLocalModels(ctx context.Context) ([]LocalModel, error) {
 	return lr.Models, nil
 }
 
-// ListRemoteModels calls GET /hailo/v1/list
+// RemoteModel describes a model available for download from the Hailo Model
+// Zoo. Size is in bytes; it stays 0 (unknown) when the server only reports
+// names without metadata.
+type RemoteModel struct {
+	Name string `json:"name"`
+	Size int64  `json:"size,omitempty"`
+}
+
+// ListRemoteModels calls GET /hailo/v1/list and returns just the model names.
 func (c *Client) ListRemoteModels(ctx context.Context) ([]string, error) {
+	models, err := c.ListRemoteModelsDetailed(ctx)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(models))
+	for _, m := range models {
+		names = append(names, m.Name)
+	}
+	return names, nil
+}
+
+// ListRemoteModelsDetailed calls GET /hailo/v1/list and tolerates every
+// response style observed across hailo-ollama builds: the envelope may be
+// {"models":[...]} or a bare array, and each entry may be a plain name string
+// or an object carrying optional metadata ("name"/"model", "size"/"size_bytes").
+func (c *Client) ListRemoteModelsDetailed(ctx context.Context) ([]RemoteModel, error) {
 	req, err := c.newRequest(ctx, http.MethodGet, "/hailo/v1/list", nil)
 	if err != nil {
 		return nil, err
@@ -238,12 +269,51 @@ func (c *Client) ListRemoteModels(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
 	}
 
-	var rlr RemoteListResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rlr); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed reading response: %w", err)
 	}
 
-	return rlr.Models, nil
+	var raw []json.RawMessage
+	var envelope struct {
+		Models []json.RawMessage `json:"models"`
+	}
+	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Models != nil {
+		raw = envelope.Models
+	} else if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("failed decoding model list: %w", err)
+	}
+
+	models := make([]RemoteModel, 0, len(raw))
+	for _, entry := range raw {
+		var name string
+		if err := json.Unmarshal(entry, &name); err == nil {
+			if name != "" {
+				models = append(models, RemoteModel{Name: name})
+			}
+			continue
+		}
+		var obj struct {
+			Name      string `json:"name"`
+			Model     string `json:"model"`
+			Size      int64  `json:"size"`
+			SizeBytes int64  `json:"size_bytes"`
+		}
+		if err := json.Unmarshal(entry, &obj); err == nil {
+			n := obj.Name
+			if n == "" {
+				n = obj.Model
+			}
+			if n != "" {
+				size := obj.Size
+				if size == 0 {
+					size = obj.SizeBytes
+				}
+				models = append(models, RemoteModel{Name: n, Size: size})
+			}
+		}
+	}
+	return models, nil
 }
 
 // ShowModel calls POST /api/show
@@ -299,9 +369,12 @@ func (c *Client) ListRunningModels(ctx context.Context) ([]ProcessModel, error) 
 	return pr.Models, nil
 }
 
-// DeleteModel calls DELETE /api/delete
+// DeleteModel calls DELETE /api/delete.
+//
+// Like PullRequest, both "name" and "model" are sent for compatibility with
+// older and newer hailo-ollama server builds.
 func (c *Client) DeleteModel(ctx context.Context, name string) error {
-	reqPayload := map[string]string{"name": name}
+	reqPayload := map[string]string{"name": name, "model": name}
 	req, err := c.newRequest(ctx, http.MethodDelete, "/api/delete", reqPayload)
 	if err != nil {
 		return err
@@ -321,38 +394,101 @@ func (c *Client) DeleteModel(ctx context.Context, name string) error {
 	return nil
 }
 
-// PullModel calls POST /api/pull and streams progress updates
+// PullModel calls POST /api/pull and streams progress updates.
+//
+// A streamed pull is attempted first. If the server rejects it with an HTTP
+// error (some hailo-ollama builds return 500 for the streaming code path),
+// the pull is retried once with stream disabled; the server then answers with
+// a single final JSON chunk instead.
 func (c *Client) PullModel(ctx context.Context, name string, onProgress func(PullResponseChunk)) error {
-	reqPayload := PullRequest{Name: name, Stream: true}
-	req, err := c.newRequest(ctx, http.MethodPost, "/api/pull", reqPayload)
-	if err != nil {
-		return err
+	doPull := func(stream bool) (*http.Response, error) {
+		reqPayload := PullRequest{Name: name, Model: name, Stream: stream}
+		req, err := c.newRequest(ctx, http.MethodPost, "/api/pull", reqPayload)
+		if err != nil {
+			return nil, err
+		}
+		return c.HTTPClient.Do(req)
 	}
 
-	resp, err := c.HTTPClient.Do(req)
+	resp, err := doPull(true)
+	if err == nil && resp.StatusCode == http.StatusOK {
+		defer resp.Body.Close()
+		return c.decodePullStream(resp.Body, name, onProgress)
+	}
+
+	// Capture why the streamed attempt failed so it can be included in the
+	// final error when the retry fails as well.
+	streamedErr := "unknown error"
 	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
+		streamedErr = err.Error()
+	} else {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		streamedErr = fmt.Sprintf("server error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	// Retry without streaming.
+	resp, err = doPull(false)
+	if err != nil {
+		return fmt.Errorf("pull request failed: %w (streamed attempt: %s)", err, streamedErr)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return fmt.Errorf("server error (%d): %s (streamed attempt: %s)",
+			resp.StatusCode, string(body), streamedErr)
 	}
+	var chunk PullResponseChunk
+	if err := json.NewDecoder(resp.Body).Decode(&chunk); err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) && c.pullModelInstalled(name) {
+			onProgress(PullResponseChunk{Status: "success"})
+			return nil
+		}
+		return fmt.Errorf("failed decoding pull response: %w", err)
+	}
+	onProgress(chunk)
+	return nil
+}
 
-	decoder := json.NewDecoder(resp.Body)
+func (c *Client) decodePullStream(body io.Reader, name string, onProgress func(PullResponseChunk)) error {
+	decoder := json.NewDecoder(body)
 	for {
 		var chunk PullResponseChunk
 		if err := decoder.Decode(&chunk); err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
+			}
+			// Some hailo-ollama builds close the connection right after the
+			// last progress chunk, cutting the final JSON object short
+			// ("unexpected EOF"). That does not necessarily mean the pull
+			// failed: check whether the model actually landed locally before
+			// reporting an error.
+			if errors.Is(err, io.ErrUnexpectedEOF) && c.pullModelInstalled(name) {
+				onProgress(PullResponseChunk{Status: "success"})
+				return nil
 			}
 			return fmt.Errorf("failed decoding stream: %w", err)
 		}
 		onProgress(chunk)
 	}
-
 	return nil
+}
+
+// pullModelInstalled reports whether name is present in the server's local
+// model list (GET /api/tags).
+func (c *Client) pullModelInstalled(name string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	models, err := c.ListLocalModels(ctx)
+	if err != nil {
+		return false
+	}
+	for _, m := range models {
+		if m.Name == name || m.Model == name {
+			return true
+		}
+	}
+	return false
 }
 
 // ChatStream calls POST /api/chat and streams output tokens

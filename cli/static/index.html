@@ -65,6 +65,24 @@
         <button type="button" id="instruction-save" class="dialog-btn primary">Save</button>
       </div>
     </dialog>
+
+    <dialog id="model-add-dialog" class="instruction-dialog">
+      <h2>Add model</h2>
+      <div id="model-remote-list" class="model-remote-list">
+        <div class="model-remote-empty">Loading available models…</div>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" id="model-add-close" class="dialog-btn">Close</button>
+      </div>
+    </dialog>
+
+    <dialog id="model-remove-dialog" class="instruction-dialog">
+      <h2>Remove model</h2>
+      <div id="model-installed-list" class="model-remote-list"></div>
+      <div class="dialog-actions">
+        <button type="button" id="model-remove-close" class="dialog-btn">Close</button>
+      </div>
+    </dialog>
   </div>
   <script src="/app.js"></script>
 </body>

@@ -47,6 +47,9 @@ func RunWebUI(ctx context.Context, apiCli *client.Client, addr, metricsPath stri
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.FS(staticContent)))
 	mux.HandleFunc("GET /api/models", handleListModels(apiCli))
+	mux.HandleFunc("GET /api/models/remote", handleListRemoteModels(apiCli))
+	mux.HandleFunc("POST /api/models/pull", handlePullModel(apiCli))
+	mux.HandleFunc("POST /api/models/remove", handleRemoveModel(apiCli))
 	mux.HandleFunc("POST /api/chat", handleWebChat(apiCli))
 
 	// NPU telemetry: tail hailo-monitor output and expose API/SSE endpoints.
@@ -73,6 +76,13 @@ func RunWebUI(ctx context.Context, apiCli *client.Client, addr, metricsPath stri
 	return nil
 }
 
+// localModelInfo is one entry of GET /api/models. Size is in bytes and may be
+// 0 when the inference server does not report it.
+type localModelInfo struct {
+	Name string `json:"name"`
+	Size int64  `json:"size,omitempty"`
+}
+
 func handleListModels(apiCli *client.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		models, err := apiCli.ListLocalModels(r.Context())
@@ -80,12 +90,85 @@ func handleListModels(apiCli *client.Client) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		names := make([]string, 0, len(models))
+		infos := make([]localModelInfo, 0, len(models))
 		for _, m := range models {
-			names = append(names, m.Name)
+			infos = append(infos, localModelInfo{Name: m.Name, Size: m.Size})
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(names)
+		json.NewEncoder(w).Encode(infos)
+	}
+}
+
+// modelNameRequest is the JSON body for the model management endpoints.
+type modelNameRequest struct {
+	Name string `json:"name"`
+}
+
+// handleListRemoteModels serves GET /api/models/remote with the models
+// available for download from the Hailo Model Zoo (GET /hailo/v1/list).
+// Sizes are included when the server reports them (bytes; 0 = unknown).
+func handleListRemoteModels(apiCli *client.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		models, err := apiCli.ListRemoteModelsDetailed(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(models)
+	}
+}
+
+// handlePullModel serves POST /api/models/pull {"name": "..."}. The download
+// can take minutes, so progress chunks from POST /api/pull are forwarded to
+// the browser as newline-delimited JSON. Each line is a PullResponseChunk;
+// the terminal line is {"done":true} on success or {"error":"..."} on failure.
+func handlePullModel(apiCli *client.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req modelNameRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
+			http.Error(w, "model name is required", http.StatusBadRequest)
+			return
+		}
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusOK)
+
+		enc := json.NewEncoder(w)
+		err := apiCli.PullModel(r.Context(), strings.TrimSpace(req.Name), func(chunk client.PullResponseChunk) {
+			enc.Encode(chunk)
+			flusher.Flush()
+		})
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		} else {
+			json.NewEncoder(w).Encode(map[string]bool{"done": true})
+		}
+		flusher.Flush()
+	}
+}
+
+// handleRemoveModel serves POST /api/models/remove {"name": "..."} and deletes
+// an installed model from the inference server (DELETE /api/delete).
+func handleRemoveModel(apiCli *client.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req modelNameRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
+			http.Error(w, "model name is required", http.StatusBadRequest)
+			return
+		}
+		if err := apiCli.DeleteModel(r.Context(), strings.TrimSpace(req.Name)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	}
 }
 

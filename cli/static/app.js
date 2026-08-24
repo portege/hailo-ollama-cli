@@ -9,6 +9,8 @@ const instructionDialog = document.getElementById('instruction-dialog');
 const instructionName = document.getElementById('instruction-name');
 const instructionText = document.getElementById('instruction-text');
 const instructionSaveBtn = document.getElementById('instruction-save');
+const addModelDialog = document.getElementById('model-add-dialog');
+const removeModelDialog = document.getElementById('model-remove-dialog');
 const thinkToggle = document.getElementById('think-toggle');
 const newChatBtn = document.getElementById('new-chat');
 
@@ -21,28 +23,90 @@ let busy = false;
 const METRICS_MARKER = '@@HAILO-METRICS:';
 const REASONING_MARKER = '@@HAILO-REASONING:';
 
+// Installed model names, refreshed by loadModels(). Used by the remove dialog
+// and to grey out entries inside the add dialog.
+let installedModels = [];
+// The real selected model ('' = none). Sentinel menu entries never land here.
+let selectedModel = '';
+
+const MODEL_ADD = '__add_model__';
+const MODEL_REMOVE = '__remove_model__';
+
+function appendOption(value, text) {
+  const opt = document.createElement('option');
+  opt.value = value;
+  opt.textContent = text;
+  modelSelect.appendChild(opt);
+}
+
+// The Manage group sits at the bottom of the dropdown with the add/remove
+// actions that open the model management dialogs.
+function appendModelManageGroup() {
+  const group = document.createElement('optgroup');
+  group.label = 'Manage';
+  const add = document.createElement('option');
+  add.value = MODEL_ADD;
+  add.textContent = '＋ Add model…';
+  group.appendChild(add);
+  const remove = document.createElement('option');
+  remove.value = MODEL_REMOVE;
+  remove.textContent = '－ Remove model…';
+  group.appendChild(remove);
+  modelSelect.appendChild(group);
+}
+
+// Human-readable byte size ("1.9 GB"); empty string for unknown/zero sizes.
+function formatBytes(n) {
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  const num = i === 0 || v >= 100 ? Math.round(v) : Number(v.toFixed(1));
+  return `${num} ${units[i]}`;
+}
+
+// /api/models entries may be plain names or {name, size} objects depending on
+// what the inference server reports; normalize both into {name, size}.
+function normalizeModelList(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((m) => (typeof m === 'string'
+      ? { name: m, size: 0 }
+      : { name: String(m?.name ?? ''), size: Number(m?.size) || 0 }))
+    .filter((m) => m.name);
+}
+
 async function loadModels() {
+  const prev = selectedModel;
+  let models = null;
   try {
     const res = await fetch('/api/models');
-    const models = await res.json();
-    modelSelect.innerHTML = '';
-    if (!models || models.length === 0) {
-      const opt = document.createElement('option');
-      opt.textContent = 'No models installed';
-      modelSelect.appendChild(opt);
-      return;
+    models = normalizeModelList(await res.json());
+  } catch (_) {
+    models = null;
+  }
+  modelSelect.innerHTML = '';
+  if (models === null) {
+    appendOption('', 'Failed to load models');
+  } else if (!models.length) {
+    appendOption('', 'No models installed');
+  } else {
+    for (const m of models) {
+      const size = formatBytes(m.size);
+      appendOption(m.name, size ? `${m.name} (${size})` : m.name);
     }
-    for (const name of models) {
-      const opt = document.createElement('option');
-      opt.value = name;
-      opt.textContent = name;
-      modelSelect.appendChild(opt);
-    }
-  } catch (err) {
-    modelSelect.innerHTML = '';
-    const opt = document.createElement('option');
-    opt.textContent = 'Failed to load models';
-    modelSelect.appendChild(opt);
+  }
+  appendModelManageGroup();
+  installedModels = models === null ? [] : models;
+  // Restore the previous selection when it still exists, else fall back to
+  // the first entry.
+  if (prev && [...modelSelect.options].some((o) => o.value === prev)) {
+    modelSelect.value = prev;
+    selectedModel = prev;
+  } else {
+    modelSelect.selectedIndex = 0;
+    selectedModel = modelSelect.value;
   }
 }
 
@@ -172,6 +236,195 @@ instructionDialog.addEventListener('close', () => {
 
 renderInstructionSelect('');
 
+/* ================= Model management ================= */
+// "＋ Add model…" lists downloadable models from the Hailo Model Zoo
+// (/api/models/remote) with live pull progress; "－ Remove model…" deletes an
+// installed model. Both snap the dropdown back to the previous selection while
+// their dialog is open.
+
+modelSelect.addEventListener('change', () => {
+  const v = modelSelect.value;
+  if (v !== MODEL_ADD && v !== MODEL_REMOVE) {
+    selectedModel = v;
+    return;
+  }
+  modelSelect.value = selectedModel;
+  if (v === MODEL_ADD) openAddModelDialog();
+  else openRemoveModelDialog();
+});
+
+document.getElementById('model-add-close').addEventListener('click', () =>
+  addModelDialog.close());
+document.getElementById('model-remove-close').addEventListener('click', () =>
+  removeModelDialog.close());
+
+function remoteRowMessage(text) {
+  const div = document.createElement('div');
+  div.className = 'model-remote-empty';
+  div.textContent = text;
+  return div;
+}
+
+let remoteModelNames = [];
+
+function openAddModelDialog() {
+  const listEl = document.getElementById('model-remote-list');
+  listEl.innerHTML = '';
+  listEl.appendChild(remoteRowMessage('Loading available models…'));
+  addModelDialog.showModal();
+  fetch('/api/models/remote')
+    .then(async (res) => {
+      if (!res.ok) throw new Error(await res.text());
+      remoteModelNames = normalizeModelList(await res.json());
+      renderRemoteModels(listEl);
+    })
+    .catch((err) => {
+      listEl.innerHTML = '';
+      listEl.appendChild(remoteRowMessage(`Failed to load models: ${err.message}`));
+    });
+}
+
+// Renders one row per downloadable model. Rows already installed get a
+// disabled marker; the others get an Install button that streams progress.
+function renderRemoteModels(listEl) {
+  listEl.innerHTML = '';
+  if (!Array.isArray(remoteModelNames) || remoteModelNames.length === 0) {
+    listEl.appendChild(remoteRowMessage('No downloadable models reported by the server.'));
+    return;
+  }
+  const installed = new Set(installedModels.map((m) => m.name));
+  for (const m of [...remoteModelNames].sort((a, b) => a.name.localeCompare(b.name))) {
+    const row = document.createElement('div');
+    row.className = 'model-row';
+
+    const label = document.createElement('span');
+    label.className = 'model-row-name';
+    label.textContent = m.name;
+    row.appendChild(label);
+
+    const status = document.createElement('span');
+    status.className = 'model-row-status';
+    // Pre-fill the status column with the download size when known; it is
+    // replaced by live progress once the install starts.
+    if (m.size > 0) status.textContent = formatBytes(m.size);
+    row.appendChild(status);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mini-btn';
+    if (installed.has(m.name)) {
+      btn.textContent = 'Installed';
+      btn.disabled = true;
+    } else {
+      btn.textContent = 'Install';
+      btn.addEventListener('click', () => installModel(m.name, btn, status));
+    }
+    row.appendChild(btn);
+    listEl.appendChild(row);
+  }
+}
+
+// Streams /api/models/pull NDJSON progress into the row while downloading.
+async function installModel(name, btn, status) {
+  btn.disabled = true;
+  btn.textContent = 'Installing…';
+  const setProgress = (chunk) => {
+    if (chunk.total > 0) {
+      const pct = Math.min(100, Math.round(((chunk.completed || 0) / chunk.total) * 100));
+      status.textContent = `${formatBytes(chunk.completed)} / ${formatBytes(chunk.total)} (${pct}%)`;
+    } else if (chunk.status) {
+      status.textContent = chunk.status;
+    }
+  };
+  try {
+    const res = await fetch('/api/models/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok || !res.body) throw new Error(await res.text());
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let done = false;
+    while (!done) {
+      const { value, done: streamDone } = await reader.read();
+      if (streamDone) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const chunk = JSON.parse(line);
+        if (chunk.error) throw new Error(chunk.error);
+        if (chunk.done) { done = true; break; }
+        setProgress(chunk);
+      }
+    }
+    if (!done) throw new Error('download stream ended unexpectedly');
+
+    installedModels = [...new Set([...installedModels, name])];
+    status.textContent = '';
+    btn.textContent = 'Installed';
+    await loadModels();
+  } catch (err) {
+    status.textContent = err.message;
+    btn.disabled = false;
+    btn.textContent = 'Retry';
+  }
+}
+
+function openRemoveModelDialog() {
+  const listEl = document.getElementById('model-installed-list');
+  listEl.innerHTML = '';
+  if (!installedModels.length) {
+    listEl.appendChild(remoteRowMessage('No models are installed.'));
+  }
+  for (const item of installedModels) {
+    const row = document.createElement('div');
+    row.className = 'model-row';
+
+    const label = document.createElement('span');
+    label.className = 'model-row-name';
+    label.textContent = item.name;
+    row.appendChild(label);
+
+    const meta = document.createElement('span');
+    meta.className = 'model-row-status';
+    const size = formatBytes(item.size);
+    if (size) meta.textContent = size;
+    row.appendChild(meta);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mini-btn danger';
+    btn.textContent = 'Remove';
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Remove model "${item.name}" from the server?`)) return;
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/models/remove', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: item.name }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        row.remove();
+        if (!listEl.children.length) listEl.appendChild(remoteRowMessage('No models are installed.'));
+        await loadModels();
+      } catch (err) {
+        alert(`Failed to remove "${item.name}": ${err.message}`);
+        btn.disabled = false;
+      }
+    });
+    row.appendChild(btn);
+    listEl.appendChild(row);
+  }
+  removeModelDialog.showModal();
+}
+
 function scrollToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
@@ -242,7 +495,7 @@ form.addEventListener('submit', (e) => {
 async function chat(prompt) {
   if (busy) return;
 
-  const model = modelSelect.value;
+  const model = selectedModel;
   if (!model) {
     alert('Select a model first.');
     return;

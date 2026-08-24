@@ -505,3 +505,60 @@ html, body {
 .dialog-btn.primary:hover {
   opacity: 0.9;
 }
+
+/* ---------- Model management dialogs ---------- */
+.model-remote-list {
+  max-height: 320px;
+  overflow-y: auto;
+  margin-bottom: 4px;
+}
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 2px;
+  border-bottom: 1px dashed var(--border);
+  font-size: 13px;
+}
+.model-row:last-child {
+  border-bottom: none;
+}
+.model-row-name {
+  flex: 1;
+  word-break: break-all;
+}
+.model-row-status {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.model-remote-empty {
+  color: var(--text-dim);
+  font-size: 13px;
+  padding: 8px 2px;
+}
+.mini-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+}
+.mini-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--border);
+}
+.mini-btn.danger:hover:not(:disabled) {
+  color: #e06c75;
+  border-color: #e06c75;
+  background: transparent;
+}
+.mini-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
