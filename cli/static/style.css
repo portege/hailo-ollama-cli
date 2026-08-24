@@ -58,13 +58,18 @@ html, body {
   max-width: 200px;
 }
 
+/* Right-aligns the new chat button at the end of the composer controls row. */
+.composer-controls .new-chat-btn {
+    margin-left: auto;
+}
+
 .new-chat-btn {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 8px;
-  padding: 6px 12px;
-  font-size: 13px;
+  padding: 4px 10px;
+  font-size: 12px;
   cursor: pointer;
 }
 .new-chat-btn:hover {
@@ -159,7 +164,8 @@ html, body {
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
 }
 
-/* Inline controls row: model picker, saved-instruction picker and the thinking toggle. */
+/* Inline controls row: model picker, saved-instruction picker, thinking toggle
+   and the right-aligned new chat button. */
 .composer-controls {
   display: flex;
   align-items: center;
