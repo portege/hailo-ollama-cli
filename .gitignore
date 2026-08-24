@@ -35,3 +35,5 @@ dist/
 build.sh
 hailo-ollama
 *.log
+bin/
+.run/
