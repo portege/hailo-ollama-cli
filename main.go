@@ -40,6 +40,8 @@ func printGlobalUsage() {
 	fmt.Println("Environment Variables:")
 	fmt.Println("  OLLAMA_HOST, HAILO_OLLAMA_HOST  Override the target server host")
 	fmt.Println("  HAILO_OLLAMA_MOCK               Enable mock mode if set to 'true'")
+	fmt.Println("  HAILO_OLLAMA_DB                 Path of the webui chat SQLite database")
+	fmt.Println("                                  (default: <user cache dir>/hailo-ollama/chats.db)")
 }
 
 func main() {

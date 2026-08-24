@@ -52,6 +52,17 @@ func RunWebUI(ctx context.Context, apiCli *client.Client, addr, metricsPath stri
 	mux.HandleFunc("POST /api/models/remove", handleRemoveModel(apiCli))
 	mux.HandleFunc("POST /api/chat", handleWebChat(apiCli))
 
+	// Saved conversations (server-side SQLite, see cli/chatstore.go).
+	chatStore, err := OpenChatStore(DefaultChatDBPath())
+	if err != nil {
+		return fmt.Errorf("failed to open chat database: %w", err)
+	}
+	defer chatStore.Close()
+	mux.HandleFunc("GET /api/chats", handleListChats(chatStore))
+	mux.HandleFunc("POST /api/chats", handleSaveChat(chatStore))
+	mux.HandleFunc("GET /api/chats/{id}", handleGetChat(chatStore))
+	mux.HandleFunc("DELETE /api/chats/{id}", handleDeleteChat(chatStore))
+
 	// NPU telemetry: tail hailo-monitor output and expose API/SSE endpoints.
 	npu := startNPUSource(ctx, apiCli, metricsPath)
 	mux.HandleFunc("GET /api/npu/metrics", npu.handleMetrics)

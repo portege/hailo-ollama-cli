@@ -11,6 +11,9 @@ const instructionText = document.getElementById('instruction-text');
 const instructionSaveBtn = document.getElementById('instruction-save');
 const addModelDialog = document.getElementById('model-add-dialog');
 const removeModelDialog = document.getElementById('model-remove-dialog');
+const chatListEl = document.getElementById('chat-list');
+const sidebarEl = document.getElementById('sidebar');
+const chatNewBtn = document.getElementById('chat-new');
 const thinkToggle = document.getElementById('think-toggle');
 const newChatBtn = document.getElementById('new-chat');
 
@@ -425,6 +428,16 @@ function openRemoveModelDialog() {
   removeModelDialog.showModal();
 }
 
+// Renders text into el. Assistant replies go through the Markdown renderer
+// (markdown.js); it degrades to plain text when the renderer is unavailable.
+function setMarkdownContent(el, text, isMarkdown) {
+  if (isMarkdown && typeof window.renderMarkdown === 'function') {
+    el.replaceChildren(window.renderMarkdown(text));
+  } else {
+    el.textContent = text;
+  }
+}
+
 function scrollToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
@@ -441,9 +454,10 @@ function addMessage(role, content) {
 
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
-  const body = document.createElement('span');
+  // Assistant replies are Markdown and need a block-level container.
+  const body = document.createElement(role === 'assistant' ? 'div' : 'span');
   body.className = 'bubble-text';
-  body.textContent = content;
+  setMarkdownContent(body, content, role === 'assistant');
   bubble.appendChild(body);
 
   row.appendChild(avatar);
@@ -471,12 +485,17 @@ input.addEventListener('keydown', (e) => {
   }
 });
 
-newChatBtn.addEventListener('click', () => {
+function startNewChat() {
   history = [];
+  currentChatId = null;
   messagesEl.innerHTML = '';
   messagesEl.appendChild(emptyState);
   emptyState.style.display = 'block';
-});
+  renderChatList();
+}
+
+newChatBtn.addEventListener('click', startNewChat);
+chatNewBtn.addEventListener('click', startNewChat);
 
 form.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -539,7 +558,7 @@ async function chat(prompt) {
       if (done) break;
       rawText += decoder.decode(value, { stream: true });
       assistantText = stripMetrics(rawText);
-      assistantBody.textContent = assistantText;
+      setMarkdownContent(assistantBody, assistantText, true);
       assistantBubble.appendChild(cursor);
       scrollToBottom();
     }
@@ -557,10 +576,11 @@ async function chat(prompt) {
     }
   } catch (err) {
     assistantText += `\n[error: ${err.message}]`;
-    assistantBody.textContent = assistantText;
+    setMarkdownContent(assistantBody, assistantText, true);
   } finally {
     cursor.remove();
     history.push({ role: 'assistant', content: assistantText });
+    saveCurrentChat();
     addActions(assistantBubble, {
       body: assistantBody,
       copy: true,
@@ -576,6 +596,7 @@ function retry(hi, prompt) {
   if (busy) return;
 
   history = history.slice(0, hi);
+  saveCurrentChat();
 
   const rows = Array.from(messagesEl.children);
   const start = rows.findIndex((el) => Number(el.dataset.hi) === hi);
@@ -886,3 +907,153 @@ document.getElementById('npu-close').addEventListener('click', () =>
 
 setInterval(refreshNPU, 2000);
 refreshNPU();
+
+/* ================= Saved chats (server-side SQLite) ================= */
+// Conversations live in a SQLite database managed by the webui process
+// (see /api/chats endpoints), so history survives restarts and is shared
+// across every browser that opens this instance.
+
+let chats = [];
+let currentChatId = null;
+
+async function refreshChatList() {
+  try {
+    const res = await fetch('/api/chats');
+    if (!res.ok) throw new Error(await res.text());
+    chats = await res.json();
+    renderChatList();
+  } catch (err) {
+    console.warn('Failed to load chat list:', err);
+  }
+}
+
+function renderChatList() {
+  chatListEl.innerHTML = '';
+  if (!chats.length) {
+    const empty = document.createElement('div');
+    empty.className = 'chat-list-empty';
+    empty.textContent = 'No saved chats yet.';
+    chatListEl.appendChild(empty);
+    return;
+  }
+  for (const c of chats) {
+    const item = document.createElement('div');
+    item.className = 'chat-item' + (c.id === currentChatId ? ' active' : '');
+
+    const title = document.createElement('span');
+    title.className = 'chat-item-title';
+    title.textContent = c.title || 'Untitled chat';
+
+    const time = document.createElement('span');
+    time.className = 'chat-item-time';
+    time.textContent = formatChatTime(c.updatedAt);
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'chat-item-del';
+    del.textContent = '✕';
+    del.title = 'Delete chat';
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Delete "${c.title || 'this chat'}"?`)) return;
+      try {
+        const res = await fetch('/api/chats/' + encodeURIComponent(c.id), {
+          method: 'DELETE',
+        });
+        if (!res.ok) throw new Error(await res.text());
+        await refreshChatList();
+        if (c.id === currentChatId) startNewChat();
+      } catch (err) {
+        alert(`Failed to delete chat: ${err.message}`);
+      }
+    });
+
+    item.append(title, time, del);
+    item.addEventListener('click', () => loadChat(c.id));
+    chatListEl.appendChild(item);
+  }
+}
+
+function formatChatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const now = new Date();
+  return d.toDateString() === now.toDateString()
+    ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+// Upserts the active conversation after each completed exchange.
+async function saveCurrentChat() {
+  if (!history.length) return;
+  const firstUser = history.find((m) => m.role === 'user');
+  const payload = {
+    id: currentChatId || undefined,
+    title: (firstUser?.content || 'New chat').replace(/\s+/g, ' ').trim().slice(0, 60),
+    messages: history.map((m) => ({ role: m.role, content: m.content })),
+  };
+  try {
+    const res = await fetch('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    if (data.id) currentChatId = data.id;
+    await refreshChatList();
+  } catch (err) {
+    console.warn('Failed to save chat:', err);
+  }
+}
+
+// Fetches a saved conversation and replays it into the message area.
+// Assistant replies are re-rendered as Markdown by addMessage().
+async function loadChat(id) {
+  try {
+    const res = await fetch('/api/chats/' + encodeURIComponent(id));
+    if (!res.ok) throw new Error(await res.text());
+    const chat = await res.json();
+
+    currentChatId = chat.id;
+    history = (chat.messages || []).map((m) => ({ role: m.role, content: m.content }));
+
+    messagesEl.innerHTML = '';
+    emptyState.style.display = 'none';
+    for (const msg of history) {
+      const { bubble } = addMessage(msg.role, msg.content);
+      addActions(bubble, { copy: true });
+    }
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    renderChatList();
+    sidebarEl.classList.remove('open'); // close the drawer on narrow screens
+  } catch (err) {
+    alert(`Failed to load chat: ${err.message}`);
+  }
+}
+
+document.getElementById('sidebar-toggle').addEventListener('click', () =>
+  sidebarEl.classList.toggle('open'));
+
+refreshChatList();
+
+// One-time migration: pull conversations saved by older builds out of
+// localStorage into the server database.
+(async function migrateLocalChats() {
+  try {
+    const raw = localStorage.getItem('hailo-chats');
+    if (!raw) return;
+    const local = JSON.parse(raw);
+    localStorage.removeItem('hailo-chats');
+    if (!Array.isArray(local)) return;
+    for (const c of local.slice(-50)) {
+      if (!c || !Array.isArray(c.messages) || !c.messages.length) continue;
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: c.title || 'Imported chat', messages: c.messages }),
+      });
+    }
+    await refreshChatList();
+  } catch (_) { /* best effort */ }
+})();

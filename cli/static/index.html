@@ -8,7 +8,17 @@
 </head>
 <body>
   <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <span>Chats</span>
+        <button id="chat-new" class="chat-new-btn" type="button" title="Start a new chat">＋</button>
+      </div>
+      <div class="chat-list" id="chat-list"></div>
+    </aside>
+
+    <div class="main">
     <header class="topbar">
+      <button id="sidebar-toggle" class="sidebar-toggle" type="button" title="Toggle chat list">☰</button>
       <div class="brand">Hailo&nbsp;Ollama</div>
       <button id="npu-chip" class="npu-chip" type="button" title="Live NPU status">NPU …</button>
     </header>
@@ -47,6 +57,7 @@
         </div>
       </form>
     </footer>
+    </div><!-- /.main -->
 
     <aside id="npu-drawer" class="npu-drawer" aria-hidden="true">
       <header class="npu-drawer-header">
@@ -84,6 +95,7 @@
       </div>
     </dialog>
   </div>
+  <script src="/markdown.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
